@@ -1,0 +1,2 @@
+#!/bin/sh
+exec celery -A app.tasks worker --loglevel=info --concurrency=2 --pool=solo
