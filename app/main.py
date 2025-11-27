@@ -59,22 +59,16 @@ async def upload_file(file: UploadFile = File(...)):
 def task_status(task_id: str):
     task = AsyncResult(task_id, app=celery_app)
 
-    response = {
-        "state": task.state,
-        "meta": {}
+    state = task.state
+    info = task.info if isinstance(task.info, dict) else {}
+
+    return {
+        "state": state,
+        "meta": {
+            "current": info.get("current", 0),
+            "total": info.get("total", 1)
+        }
     }
-
-    if task.state == "PROGRESS":
-        response["meta"] = task.info
-
-    if task.state == "SUCCESS":
-        response["meta"] = task.result
-
-    if task.state == "FAILURE":
-        response["meta"] = str(task.info)
-
-    return response
- 
  
 @app.get("/products")
 def list_products(
