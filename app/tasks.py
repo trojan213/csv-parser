@@ -3,11 +3,14 @@ from celery import Celery
 from app import database
 from sqlalchemy import text
 import csv
+import os
+
+REDIS_URL=os.getenv("REDIS_URL")
 
 celery_app = Celery(
     "tasks",
-    broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/0"
+    broker=REDIS_URL,
+    backend=REDIS_URL
 )
 
 BATCH_SIZE = 2000   # 2k rows per batch works well for PostgreSQL on Windows
