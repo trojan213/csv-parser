@@ -45,7 +45,7 @@ async def upload_file(file: UploadFile = File(...)):
             if not chunk:
                 break
             out.write(chunk)
-
+    await file.close()
     task = import_products.delay(str(path))
     return {"task_id": task.id}
 
