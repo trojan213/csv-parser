@@ -14,9 +14,16 @@ from app.tasks import import_products, celery_app
 from app.database import Base, engine, SessionLocal
 from app import models
  
-Base.metadata.create_all(bind=engine)
+
 
 app = FastAPI()
+
+
+@app.on_event("startup")
+def startup_db():
+    Base.metadata.create_all(bind=engine)
+
+
 templates = Jinja2Templates(directory="app/templates")
 
 UPLOAD_DIR = Path("uploads")
