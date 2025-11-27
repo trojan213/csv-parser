@@ -20,24 +20,29 @@ def import_products(self, csv_file_path: str):
     db = database.SessionLocal()
 
     try:
-        with open(csv_file_path, newline='', encoding='utf-8') as f:
+        # First pass: count rows
+        with open(csv_file_path, newline='', encoding="utf-8") as f:
+            total = sum(1 for _ in f) - 1  # remove header row
+
+        processed = 0
+        batch = []
+
+        # Second pass: process rows
+        with open(csv_file_path, newline='', encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            rows = list(reader)
-            total = len(rows)
 
-            batch = []
-            processed = 0
+            for row in reader:
+                processed += 1
 
-            for i, r in enumerate(rows, start=1):
                 batch.append({
-                    "sku": r["sku"].strip().lower(),
-                    "name": r["name"].strip(),
-                    "description": (r.get("description") or "").strip(),
+                    "sku": row["sku"].strip().lower(),
+                    "name": row["name"].strip(),
+                    "description": (row.get("description") or "").strip(),
                     "active": True
                 })
 
-                # Flush batch
-                if len(batch) == BATCH_SIZE or i == total:
+                # Write batch
+                if len(batch) == BATCH_SIZE:
                     db.execute(text("""
                         INSERT INTO products (sku, name, description, active)
                         VALUES (:sku, :name, :description, :active)
@@ -48,21 +53,35 @@ def import_products(self, csv_file_path: str):
                           description = EXCLUDED.description,
                           active = EXCLUDED.active
                     """), batch)
-
                     db.commit()
                     batch.clear()
 
-                # Update progress every 500 rows (keeps UI responsive)
-                if i % 500 == 0 or i == total:
+                # Report progress every 500 rows
+                if processed % 500 == 0 or processed == total:
                     self.update_state(
                         state="PROGRESS",
-                        meta={"current": i, "total": total}
+                        meta={"current": processed, "total": total}
                     )
 
-            return {"current": total, "total": total, "status": "Completed"}
+            # Flush remaining
+            if batch:
+                db.execute(text("""
+                    INSERT INTO products (sku, name, description, active)
+                    VALUES (:sku, :name, :description, :active)
+                    ON CONFLICT (sku)
+                    DO UPDATE
+                    SET
+                      name = EXCLUDED.name,
+                      description = EXCLUDED.description,
+                      active = EXCLUDED.active
+                """), batch)
+                db.commit()
+
+        return {"current": processed, "total": total}
 
     finally:
         db.close()
+
 
 if __name__ == "__main__":
     celery_app.worker_main()
