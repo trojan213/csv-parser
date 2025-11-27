@@ -13,7 +13,9 @@ from app.webhooks import trigger_event
 from app.tasks import import_products, celery_app
 from app.database import Base, engine, SessionLocal
 from app import models
- 
+from celery.result import AsyncResult
+from app.tasks import celery_app
+
 print("..1.1. FASTAPI BOOTING")
 
 
@@ -56,7 +58,23 @@ async def upload_file(file: UploadFile = File(...)):
 @app.get("/tasks/{task_id}")
 def task_status(task_id: str):
     task = AsyncResult(task_id, app=celery_app)
-    return {"state": task.state, "meta": task.info}
+
+    response = {
+        "state": task.state,
+        "meta": {}
+    }
+
+    if task.state == "PROGRESS":
+        response["meta"] = task.info
+
+    if task.state == "SUCCESS":
+        response["meta"] = task.result
+
+    if task.state == "FAILURE":
+        response["meta"] = str(task.info)
+
+    return response
+ 
  
 @app.get("/products")
 def list_products(
