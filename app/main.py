@@ -14,6 +14,7 @@ from app.tasks import import_products, celery_app
 from app.database import Base, engine, SessionLocal
 from app import models
  
+print("..1.1. FASTAPI BOOTING")
 
 
 app = FastAPI()
