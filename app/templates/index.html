@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Product Manager</title>
+    <style>
+        body { font-family: Arial; margin: 30px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 8px; }
+        th { background: #f2f2f2; }
+        input, button, select { padding: 6px; margin: 4px; }
+        .box { border:1px solid #ddd; padding:10px; margin-top:20px; }
+        .green { color:green }
+        .red { color:red }
+    </style>
+</head>
+
+<body>
+
+<h2>Upload CSV</h2>
+<input type="file" id="file">
+<button onclick="upload()">Upload</button>
+<div id="progress"></div>
+
+<hr>
+
+<h2>Create Product</h2>
+<input id="sku" placeholder="SKU">
+<input id="name" placeholder="Name">
+<input id="desc" placeholder="Description">
+<button onclick="createProduct()">Create</button>
+
+<hr>
+
+<h2>Filters</h2>
+<input id="q" placeholder="Search">
+<select id="active">
+    <option value="">All</option>
+    <option value="true">Active</option>
+    <option value="false">Inactive</option>
+</select>
+<button onclick="loadProducts()">Apply</button>
+
+<hr>
+
+<h2>Products</h2>
+<button onclick="deleteAll()" style="color:red;">DELETE ALL PRODUCTS</button>
+
+<table>
+<thead>
+<tr>
+    <th>SKU</th><th>Name</th><th>Description</th><th>Active</th><th>Actions</th>
+</tr>
+</thead>
+<tbody id="products"></tbody>
+</table>
+
+<p>
+<button onclick="prev()">Prev</button>
+Page <span id="page">1</span>
+<button onclick="next()">Next</button>
+</p>
+
+<hr>
+
+
+<div class="box">
+<h2>Webhook Manager</h2>
+
+<input id="wh_url" placeholder="Webhook URL">
+<select id="wh_event">
+    <option value="product.created">product.created</option>
+    <option value="product.updated">product.updated</option>
+    <option value="product.deleted">product.deleted</option>
+    <option value="bulk.deleted">bulk.deleted</option>
+</select>
+<button onclick="addWebhook()">Add</button>
+
+<table>
+<thead>
+<tr>
+  <th>ID</th><th>URL</th><th>Event</th><th>Enabled</th><th>Actions</th>
+</tr>
+</thead>
+<tbody id="webhooks"></tbody>
+</table>
+</div>
+
+<script>
+let page = 1;
+
+
+async function upload() {
+    let f = document.getElementById("file").files[0];
+    let form = new FormData();
+    form.append("file", f);
+
+    let r = await fetch("/upload", { method:"POST", body:form });
+    let d = await r.json();
+
+    pollTask(d.task_id);
+}
+
+
+async function pollTask(id){
+    let box = document.getElementById("progress");
+
+    let timer = setInterval(async ()=>{
+        let r = await fetch(`/tasks/${id}`);
+        let d = await r.json();
+
+        if(d.meta){
+            let p = Math.floor(d.meta.current / d.meta.total * 100);
+            box.innerText = `Processing: ${p}%`;
+        }
+
+        if(d.state === "SUCCESS"){
+            box.innerText = " Import complete";
+            clearInterval(timer);
+            loadProducts();
+        }
+
+        if(d.state === "FAILURE"){
+            box.innerText = " Import failed";
+            clearInterval(timer);
+        }
+    },1000);
+}
+
+async function loadProducts(){
+    let q = document.getElementById("q").value;
+    let a = document.getElementById("active").value;
+
+    let url = `/products?page=${page}&size=20`;
+    if(q) url += `&q=${q}`;
+    if(a) url += `&active=${a}`;
+
+    let r = await fetch(url);
+    let d = await r.json();
+
+    let body = document.getElementById("products");
+    body.innerHTML = "";
+
+    d.items.forEach(p=>{
+        body.innerHTML += `
+        <tr>
+            <td>${p.sku}</td>
+            <td>${p.name}</td>
+            <td>${p.description}</td>
+            <td>${p.active}</td>
+            <td><button onclick="del('${p.sku}')">Delete</button></td>
+        </tr>
+        `;
+    });
+
+    document.getElementById("page").innerText = page;
+}
+
+
+async function createProduct(){
+    let body = {
+        sku: sku.value,
+        name: name.value,
+        description: desc.value,
+        active:true
+    };
+
+    await fetch("/products",{
+        method:"POST",
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body)
+    });
+
+    loadProducts();
+}
+
+
+async function del(sku){
+    await fetch(`/products/${sku}`,{method:"DELETE"});
+    loadProducts();
+}
+
+
+async function deleteAll(){
+    if(!confirm("DELETE ALL PRODUCTS?")) return;
+    await fetch("/products/delete-all",{method:"DELETE"});
+    loadProducts();
+}
+
+
+function next(){ page++; loadProducts(); }
+function prev(){ if(page>1) page--; loadProducts(); }
+
+
+
+async function loadWebhooks(){
+    let r = await fetch("/webhooks");
+    let data = await r.json();
+
+    let body = document.getElementById("webhooks");
+    body.innerHTML = "";
+
+    data.forEach(w=>{
+        body.innerHTML += `
+        <tr>
+            <td>${w.id}</td>
+            <td>${w.url}</td>
+            <td>${w.event}</td>
+            <td>${w.enabled ? "yes" : "no"}</td>
+            <td>
+                <button onclick="toggle(${w.id},${!w.enabled})">Toggle</button>
+                <button onclick="test(${w.id})">Test</button>
+                <button onclick="remove(${w.id})">Delete</button>
+            </td>
+        </tr>
+        `;
+    });
+}
+
+
+async function addWebhook(){
+    let data = {
+        url: wh_url.value,
+        event: wh_event.value,
+        enabled: true
+    };
+
+    await fetch("/webhooks",{
+        method:"POST",
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(data)
+    });
+
+    loadWebhooks();
+}
+
+
+async function toggle(id,val){
+    await fetch(`/webhooks/${id}`,{
+        method:"PUT",
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({enabled:val})
+    });
+
+    loadWebhooks();
+}
+
+
+async function remove(id){
+    await fetch(`/webhooks/${id}`,{method:"DELETE"});
+    loadWebhooks();
+}
+
+
+async function test(id){
+    let r = await fetch(`/webhooks/test/${id}`,{method:"POST"});
+    let d = await r.json();
+    alert("Webhook response: " + d.code);
+}
+
+
+loadProducts();
+loadWebhooks();
+
+</script>
+
+</body>
+</html>
