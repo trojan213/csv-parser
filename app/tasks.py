@@ -13,7 +13,7 @@ celery_app = Celery(
     backend=REDIS_URL
 )
 
-BATCH_SIZE = 2000   # 2k rows per batch works well for PostgreSQL on Windows
+BATCH_SIZE = 2000  
 
 @celery_app.task(bind=True)
 def import_products(self, csv_file_path: str):
