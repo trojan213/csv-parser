@@ -6,7 +6,7 @@ from fastapi import Request
 from sqlalchemy import or_
 from celery.result import AsyncResult
 from pathlib import Path
-
+from celery import current_app
 from app.schemas import ProductCreate, ProductUpdate, WebhookCreate, WebhookUpdate
 from app.models import Webhook
 from app.webhooks import trigger_event
@@ -45,8 +45,11 @@ async def upload_file(file: UploadFile = File(...)):
             if not chunk:
                 break
             out.write(chunk)
+        out.flush()
+
     await file.close()
-    task = import_products.delay(str(path))
+
+    task = current_app.send_task("app.tasks.import_products", args=[str(path)])
     return {"task_id": task.id}
 
 
