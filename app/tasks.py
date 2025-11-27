@@ -13,6 +13,16 @@ celery_app = Celery(
     backend=REDIS_URL
 )
 
+celery_app.conf.update(
+    task_track_started=True,
+    result_extended=True,
+    task_store_errors_even_if_ignored=True,
+    result_serializer="json",
+    accept_content=["json"],
+    task_serializer="json",
+)
+celery_app.conf.task_ignore_result = False
+
 BATCH_SIZE = 2000  
 
 @celery_app.task(bind=True, name="app.tasks.import_products")
