@@ -15,8 +15,9 @@ celery_app = Celery(
 
 BATCH_SIZE = 2000  
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, name="app.tasks.import_products")
 def import_products(self, csv_file_path: str):
+
     db = database.SessionLocal()
 
     try:
