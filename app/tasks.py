@@ -1,15 +1,17 @@
 from celery import Celery
 from app import database
 from sqlalchemy import text
-import csv, os, io, logging
+import csv, os, io, logging, base64
 
 REDIS_URL = os.getenv("REDIS_URL")
 
+# Redis used ONLY as broker (not result backend)
 celery_app = Celery("tasks", broker=REDIS_URL)
 
+# Safe serializer only
 celery_app.conf.update(
-    task_serializer="pickle",
-    accept_content=["pickle"]
+    task_serializer="json",
+    accept_content=["json"]
 )
 
 BATCH_SIZE = 2000
@@ -22,7 +24,8 @@ def import_products(self, csv_base64: str):
     db = database.SessionLocal()
 
     try:
-        # Decode CSV
+        # Decode Base64 → bytes → text
+        csv_bytes = base64.b64decode(csv_base64)
         f = io.StringIO(csv_bytes.decode("utf-8"))
         rows = list(csv.DictReader(f))
         total = len(rows)
@@ -31,7 +34,7 @@ def import_products(self, csv_base64: str):
 
         logging.info("CSV RECEIVED: %d rows", total)
 
-        # Initialize progress row
+        # Initialize progress
         db.execute(text("""
             INSERT INTO task_progress(task_id, current, total, state)
             VALUES (:id, 0, :t, 'STARTED')
@@ -73,7 +76,7 @@ def import_products(self, csv_base64: str):
                 """), {"c": processed, "id": self.request.id})
                 db.commit()
 
-        # Flush remainder
+        # Flush remaining
         if batch:
             db.execute(text("""
                 INSERT INTO products (sku, name, description, active)
@@ -97,7 +100,7 @@ def import_products(self, csv_base64: str):
 
         return "DONE"
 
-    except Exception as e:
+    except Exception:
         logging.error("IMPORT FAILED", exc_info=True)
         db.execute(text("""
             UPDATE task_progress
