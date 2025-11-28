@@ -36,33 +36,33 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
  
-
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    data = await file.read()
-
-    task = celery_app.send_task("app.tasks.import_products", args=[data])
-
+    content = await file.read()     
+    task = import_products.delay(content)  
     return {"task_id": task.id}
 
-
 @app.get("/tasks/{task_id}")
-def task_status(task_id: str):
+def get_task(task_id: str):
+    db = database.SessionLocal()
+    row = db.execute(text("""
+        SELECT current, total, state
+        FROM task_progress
+        WHERE task_id = :id
+    """), {"id": task_id}).fetchone()
+    db.close()
 
-    task = AsyncResult(task_id, app=celery_app)
-
-    print("RAW TASK INFO:", task.info, flush=True)
-
-    meta = task.info if isinstance(task.info, dict) else {}
+    if not row:
+        return {"state": "PENDING"}
 
     return {
-        "state": task.state,
+        "state": row.state,
         "meta": {
-            "current": int(meta.get("current") or 0),
-            "total": int(meta.get("total") or 1)
+            "current": row.current,
+            "total": row.total
         }
     }
- 
+
 @app.get("/products")
 def list_products(
     page: int = Query(1, ge=1),
