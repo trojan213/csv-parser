@@ -4,8 +4,9 @@ from app import database
 from sqlalchemy import text
 import csv
 import os
+import io
 
-REDIS_URL=os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL")
 
 celery_app = Celery(
     "tasks",
@@ -23,70 +24,67 @@ celery_app.conf.update(
 )
 celery_app.conf.task_ignore_result = False
 
-BATCH_SIZE = 2000  
+BATCH_SIZE = 2000
 
 @celery_app.task(bind=True, name="app.tasks.import_products")
-def import_products(self, csv_file_path: str):
+def import_products(self, csv_bytes: bytes):
 
     db = database.SessionLocal()
 
     try:
-        # First pass: count rows
-        with open(csv_file_path, newline='', encoding="utf-8") as f:
-            total = sum(1 for _ in f) - 1  # remove header row
+        # Read CSV from memory (no filesystem)
+        text_data = csv_bytes.decode("utf-8")
+        reader = csv.DictReader(io.StringIO(text_data))
+
+        rows = list(reader)
+        total = len(rows)
 
         processed = 0
         batch = []
 
-        # Second pass: process rows
-        with open(csv_file_path, newline='', encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+        for row in rows:
+            processed += 1
 
-            for row in reader:
-                processed += 1
+            batch.append({
+                "sku": row["sku"].strip().lower(),
+                "name": row["name"].strip(),
+                "description": (row.get("description") or "").strip(),
+                "active": True
+            })
 
-                batch.append({
-                    "sku": row["sku"].strip().lower(),
-                    "name": row["name"].strip(),
-                    "description": (row.get("description") or "").strip(),
-                    "active": True
-                })
-
-                # Write batch
-                if len(batch) == BATCH_SIZE:
-                    db.execute(text("""
-                        INSERT INTO products (sku, name, description, active)
-                        VALUES (:sku, :name, :description, :active)
-                        ON CONFLICT (sku)
-                        DO UPDATE
-                        SET
-                          name = EXCLUDED.name,
-                          description = EXCLUDED.description,
-                          active = EXCLUDED.active
-                    """), batch)
-                    db.commit()
-                    batch.clear()
-
-                # Report progress every 500 rows
-                if processed % 500 == 0 or processed == total:
-                    self.update_state(
-                        state="PROGRESS",
-                        meta={"current": processed, "total": total}
-                    )
-
-            # Flush remaining
-            if batch:
+            # Flush batch
+            if len(batch) == BATCH_SIZE:
                 db.execute(text("""
                     INSERT INTO products (sku, name, description, active)
                     VALUES (:sku, :name, :description, :active)
                     ON CONFLICT (sku)
-                    DO UPDATE
-                    SET
+                    DO UPDATE SET
                       name = EXCLUDED.name,
                       description = EXCLUDED.description,
                       active = EXCLUDED.active
                 """), batch)
+
                 db.commit()
+                batch.clear()
+
+            # Emit progress every 500 rows
+            if processed % 500 == 0 or processed == total:
+                self.update_state(
+                    state="PROGRESS",
+                    meta={"current": processed, "total": total}
+                )
+
+        if batch:
+            db.execute(text("""
+                INSERT INTO products (sku, name, description, active)
+                VALUES (:sku, :name, :description, :active)
+                ON CONFLICT (sku)
+                DO UPDATE SET
+                  name = EXCLUDED.name,
+                  description = EXCLUDED.description,
+                  active = EXCLUDED.active
+            """), batch)
+            db.commit()
 
         return {"current": processed, "total": total}
 
