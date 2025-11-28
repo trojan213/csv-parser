@@ -1,51 +1,28 @@
-from sqlalchemy import text
-from fastapi import FastAPI, UploadFile, File, Query
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from fastapi import Request
-from sqlalchemy import or_
-from celery.result import AsyncResult
-from pathlib import Path
-from celery import current_app
-from app.schemas import ProductCreate, ProductUpdate, WebhookCreate, WebhookUpdate
-from app.models import Webhook
-from app.webhooks import trigger_event
-from app.tasks import import_products, celery_app
-from app.database import Base, engine, SessionLocal
-from app import models
-from celery.result import AsyncResult
-from app.tasks import celery_app
-from app import database
 from sqlalchemy import text
-
-
-print("..1.1. FASTAPI BOOTING")
-
+from app import database
+from app.tasks import import_products
+import base64
 
 app = FastAPI()
 
-
-@app.on_event("startup")
-def startup_db():
-    Base.metadata.create_all(bind=engine)
-
-
 templates = Jinja2Templates(directory="app/templates")
 
-UPLOAD_DIR = Path("/tmp/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
+def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
- 
+
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    content = await file.read()     
+    content = await file.read()
     encoded = base64.b64encode(content).decode("utf-8")
     task = import_products.delay(encoded)
-
     return {"task_id": task.id}
+
 
 @app.get("/tasks/{task_id}")
 def get_task(task_id: str):
@@ -68,171 +45,124 @@ def get_task(task_id: str):
         }
     }
 
+
+# --------------------
+# PRODUCTS API
+# --------------------
+
 @app.get("/products")
-def list_products(
-    page: int = Query(1, ge=1),
-    size: int = Query(20, le=100),
-    q: str | None = None,
-    active: bool | None = None
-):
-    db = SessionLocal()
-    query = db.query(models.Product)
+def list_products(page: int = 1, size: int = 20, q: str = "", active: str = ""):
+    db = database.SessionLocal()
+
+    where = []
+    params = {"limit": size, "offset": (page-1)*size}
 
     if q:
-        query = query.filter(
-            or_(
-                models.Product.sku.ilike(f"%{q}%"),
-                models.Product.name.ilike(f"%{q}%"),
-                models.Product.description.ilike(f"%{q}%")
-            )
-        )
+        where.append("(name ILIKE :q OR sku ILIKE :q)")
+        params["q"] = f"%{q}%"
 
-    if active is not None:
-        query = query.filter(models.Product.active == active)
+    if active:
+        where.append("active = :a")
+        params["a"] = active.lower() == "true"
 
-    total = query.count()
-    items = query.offset((page - 1) * size).limit(size).all()
+    query = "SELECT * FROM products"
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY sku LIMIT :limit OFFSET :offset"
 
+    items = db.execute(text(query), params).fetchall()
     db.close()
-    return {"items": items, "total": total}
+
+    return {"items": [dict(r) for r in items]}
 
 
 @app.post("/products")
-def create_product(product: ProductCreate):
-    db = SessionLocal()
-
-    item = models.Product(**product.dict())
-    db.add(item)
+def create_product(product: dict):
+    db = database.SessionLocal()
+    db.execute(text("""
+        INSERT INTO products (sku, name, description, active)
+        VALUES (:sku, :name, :description, :active)
+        ON CONFLICT (sku) DO NOTHING
+    """), product)
     db.commit()
-    db.refresh(item)
     db.close()
-
-    trigger_event("product.created", {
-        "sku": item.sku,
-        "name": item.name,
-        "description": item.description,
-        "active": item.active
-    })
-
-    return item
-
-
-@app.put("/products/{sku}")
-def update_product(sku: str, product: ProductUpdate):
-    db = SessionLocal()
-    item = db.query(models.Product).filter(models.Product.sku == sku.lower()).first()
-
-    if not item:
-        db.close()
-        return {"error": "not found"}
-
-    for k, v in product.dict(exclude_unset=True).items():
-        setattr(item, k, v)
-
-    db.commit()
-    db.refresh(item)
-    db.close()
-
-    trigger_event("product.updated", {
-        "sku": item.sku,
-        "name": item.name,
-        "description": item.description,
-        "active": item.active
-    })
-
-    return item
+    return {"status": "created"}
 
 
 @app.delete("/products/{sku}")
 def delete_product(sku: str):
-    db = SessionLocal()
-    item = db.query(models.Product).filter(models.Product.sku == sku.lower()).first()
-
-    if not item:
-        db.close()
-        return {"error": "not found"}
-
-    db.delete(item)
+    db = database.SessionLocal()
+    db.execute(text("DELETE FROM products WHERE sku=:s"), {"s": sku})
     db.commit()
     db.close()
-
-    trigger_event("product.deleted", {"sku": sku})
-    return {"deleted": sku}
+    return {"status": "deleted"}
 
 
 @app.delete("/products/delete-all")
-def delete_all_products():
-    db = SessionLocal()
-
+def delete_all():
+    db = database.SessionLocal()
     db.execute(text("DELETE FROM products"))
-    db.execute(text("ALTER SEQUENCE products_id_seq RESTART WITH 1"))
     db.commit()
     db.close()
-
-    trigger_event("bulk.deleted", {})
     return {"status": "all deleted"}
+
+
+# --------------------
+# WEBHOOK API
+# --------------------
 
 @app.get("/webhooks")
 def list_webhooks():
-    db = SessionLocal()
-    data = db.query(Webhook).all()
+    db = database.SessionLocal()
+    rows = db.execute(text("SELECT * FROM webhooks ORDER BY id")).fetchall()
     db.close()
-    return data
+    return [dict(r) for r in rows]
 
 
 @app.post("/webhooks")
-def add_webhook(hook: WebhookCreate):
-    db = SessionLocal()
-    w = Webhook(**hook.dict())
-    db.add(w)
+def create_webhook(data: dict):
+    db = database.SessionLocal()
+    db.execute(text("""
+        INSERT INTO webhooks(url, event, enabled)
+        VALUES (:url, :event, :enabled)
+    """), data)
     db.commit()
-    db.refresh(w)
     db.close()
-    return w
+    return {"status": "created"}
 
 
 @app.put("/webhooks/{id}")
-def update_webhook(id: int, hook: WebhookUpdate):
-    db = SessionLocal()
-    w = db.query(Webhook).filter(Webhook.id == id).first()
-
-    if not w:
-        db.close()
-        return {"error": "not found"}
-
-    for k, v in hook.dict(exclude_unset=True).items():
-        setattr(w, k, v)
-
+def toggle_webhook(id: int, data: dict):
+    db = database.SessionLocal()
+    db.execute(text("""
+        UPDATE webhooks SET enabled=:enabled WHERE id=:id
+    """), {"id": id, "enabled": data["enabled"]})
     db.commit()
-    db.refresh(w)
     db.close()
-    return w
+    return {"status": "updated"}
 
 
 @app.delete("/webhooks/{id}")
 def delete_webhook(id: int):
-    db = SessionLocal()
-    w = db.query(Webhook).filter(Webhook.id == id).first()
-
-    if not w:
-        db.close()
-        return {"error": "not found"}
-
-    db.delete(w)
+    db = database.SessionLocal()
+    db.execute(text("DELETE FROM webhooks WHERE id=:id"), {"id": id})
     db.commit()
     db.close()
-    return {"deleted": id}
+    return {"status": "deleted"}
 
 
 @app.post("/webhooks/test/{id}")
 def test_webhook(id: int):
-    import requests
-    db = SessionLocal()
-    w = db.query(Webhook).filter(Webhook.id == id).first()
+    db = database.SessionLocal()
+    row = db.execute(text("SELECT url FROM webhooks WHERE id=:id"), {"id": id}).fetchone()
     db.close()
 
-    if not w:
-        return {"error": "not found"}
+    if not row:
+        return {"code": "NOT_FOUND"}
 
-    r = requests.post(w.url, json={"test": True})
-    return {"status": "sent", "code": r.status_code}
+    import requests
+    try:
+        r = requests.post(row.url, json={"test": True}, timeout=5)
+        return {"code": r.status_code}
+    except Exception:
+        return {"code": "FAILED"}
