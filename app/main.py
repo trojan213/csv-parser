@@ -42,7 +42,9 @@ async def home(request: Request):
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     content = await file.read()     
-    task = import_products.delay(content)  
+    encoded = base64.b64encode(content).decode("utf-8")
+    task = import_products.delay(encoded)
+
     return {"task_id": task.id}
 
 @app.get("/tasks/{task_id}")
