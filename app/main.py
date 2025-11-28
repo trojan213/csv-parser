@@ -39,19 +39,10 @@ async def home(request: Request):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    path = UPLOAD_DIR / file.filename
+    data = await file.read()
 
-    with open(path, "wb") as out:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-        out.flush()
+    task = celery_app.send_task("app.tasks.import_products", args=[data])
 
-    await file.close()
-
-    task = current_app.send_task("app.tasks.import_products", args=[str(path)])
     return {"task_id": task.id}
 
 
