@@ -17,7 +17,7 @@ BATCH_SIZE = 2000
 logging.basicConfig(level=logging.INFO)
 
 @celery_app.task(bind=True, name="app.tasks.import_products")
-def import_products(self, csv_bytes: bytes):
+def import_products(self, csv_base64: str):
     logging.info("TASK STARTED")
     db = database.SessionLocal()
 
