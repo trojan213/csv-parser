@@ -48,18 +48,20 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.get("/tasks/{task_id}")
 def task_status(task_id: str):
+
     task = AsyncResult(task_id, app=celery_app)
 
-    info = task.info if isinstance(task.info, dict) else {}
+    print("RAW TASK INFO:", task.info, flush=True)
+
+    meta = task.info if isinstance(task.info, dict) else {}
 
     return {
         "state": task.state,
         "meta": {
-            "current": info.get("current", 0),
-            "total": info.get("total", 1)
+            "current": int(meta.get("current") or 0),
+            "total": int(meta.get("total") or 1)
         }
     }
-    
  
 @app.get("/products")
 def list_products(
