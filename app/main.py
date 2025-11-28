@@ -15,6 +15,9 @@ from app.database import Base, engine, SessionLocal
 from app import models
 from celery.result import AsyncResult
 from app.tasks import celery_app
+from app import database
+from sqlalchemy import text
+
 
 print("..1.1. FASTAPI BOOTING")
 
