@@ -5,8 +5,7 @@ import csv, os, io, logging, base64
 
 REDIS_URL = os.getenv("REDIS_URL")
 
-# Redis used ONLY as broker (not result backend)
-celery_app = Celery("tasks", broker=REDIS_URL)
+celery_app = Celery("tasks", broker=REDIS_URL, backend=REDIS_URL)
 
 # Safe serializer only
 celery_app.conf.update(
